@@ -11,3 +11,4 @@ ENV/
 .vscode/
 *.log
 user_profiles/
+archive/

@@ -6,12 +6,14 @@ from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 import os
 from dotenv import load_dotenv
+from promptlayer import PromptLayer
 
 # Load environment variables
 load_dotenv()
 
-# Configure Gemini
+# Configure Gemini and PromptLayer
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+promptlayer_client = PromptLayer(api_key=os.getenv('PROMPTLAYER_API_KEY'), enable_tracing=True)
 
 class BaziChatbot:
     def __init__(self, profile_data: Dict, daily_bazi: Dict = None):
@@ -30,47 +32,44 @@ class BaziChatbot:
             memory_key="history",
             return_messages=True
         )
-        
-        # Create a custom prompt template that includes BAZI context
-        template = """You are a knowledgeable BAZI (Chinese Metaphysics) consultant and advisor.
-
-Current Context:
-- User Profile: {profile_data}
-- Daily BAZI Reading: {daily_bazi}
-
-Previous conversation:
-{history}
-
-User Question: {question}
-"""
-        
-        self.prompt = PromptTemplate(
-            input_variables=["history", "profile_data", "daily_bazi", "question"],
-            template=template
-        )
-        
-        # Create the conversation chain
-        self.conversation = LLMChain(
-            llm=self.llm,
-            prompt=self.prompt,
-            verbose=False
-        )
     
+    @promptlayer_client.traceable
     def get_response(self, user_input: str) -> str:
-        """Get a response from the chatbot."""
         try:
-            # Get response from the conversation chain
-            response = self.conversation.predict(
-                question=user_input,
-                profile_data=str(self.profile_data),
-                daily_bazi=str(self.daily_bazi) if self.daily_bazi else "No daily reading available",
-                history=self.memory.chat_memory.messages
+            # Prepare input variables
+            input_variables = {
+                "profile": str(self.profile_data),
+                "daily_bazi": str(self.daily_bazi) if self.daily_bazi else "No daily Bazi data available",
+                "history": str(self.memory.chat_memory.messages),
+                "user_input": user_input
+            }
+
+            # Run the prompt through PromptLayer
+            response = promptlayer_client.run(
+                prompt_name="bazi_chat_template",
+                input_variables=input_variables,
+                llm_provider="google",  # Specify we're using Google's Gemini
+                llm_kwargs={
+                    "model": "gemini-pro",
+                    "temperature": 0.7
+                },
+                tags=["bazi_chat"],
+                metadata={
+                    "profile_name": self.profile_data.get("name", "unknown"),
+                    "has_daily_bazi": bool(self.daily_bazi)
+                }
             )
-            
-            # Update the memory with the latest message
-            self.memory.save_context({"input": user_input}, {"output": response})
-            return response
+
+            # Extract the response content
+            result = response["raw_response"].text
+
+            # Update conversation memory
+            self.memory.save_context({"input": user_input}, {"output": result})
+
+            return result
+
         except Exception as e:
+            print(f"Error in get_response: {str(e)}")
             return f"I apologize, but I encountered an error: {str(e)}"
     
     def update_daily_bazi(self, daily_bazi: Dict):
