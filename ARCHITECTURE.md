@@ -102,8 +102,12 @@ graph TD
     MON -.-> WS;
     MON -.-> CS;
     MON -.-> PS;
-    LOG -.-> Service Mesh;
-    TRACE -.-> Service Mesh;
+    LOG -.-> WS;
+    LOG -.-> CS;
+    LOG -.-> PS;
+    TRACE -.-> WS;
+    TRACE -.-> CS;
+    TRACE -.-> PS;
 ```
 
 ## Component Details
