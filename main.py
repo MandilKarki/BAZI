@@ -76,9 +76,31 @@ def load_user_profile(filename):
 def load_daily_bazi():
     """Load daily Bazi data from CSV file."""
     try:
-        df = pd.read_csv('Feb 2025 Bazi.csv')
-        df['Date'] = pd.to_datetime(df['Date'], format='%a %m/%d/%Y')
-        return df
+        # Try to load the CSV file
+        try:
+            df = pd.read_csv('Feb 2025 Bazi.csv')
+            
+            # Clean any potential whitespace in column names and data
+            df.columns = df.columns.str.strip()
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].str.strip()
+            
+            # Parse the date column
+            def parse_date(date_str):
+                try:
+                    return pd.to_datetime(date_str, format='%a %m/%d/%Y')
+                except:
+                    # Try alternative format if the first one fails
+                    return pd.to_datetime(date_str)
+            
+            df['Date'] = df['Date'].apply(parse_date)
+            return df
+            
+        except Exception as e:
+            st.error(f"Error loading Feb 2025 Bazi.csv: {str(e)}")
+            return None
+            
     except Exception as e:
         st.error(f"Error loading daily Bazi data: {str(e)}")
         return None
@@ -86,8 +108,21 @@ def load_daily_bazi():
 def get_bazi_for_date(date, df):
     """Get Bazi information for a specific date."""
     try:
-        row = df[df['Date'].dt.date == date.date()].iloc[0]
+        # Convert date to datetime.date for comparison
+        if isinstance(date, str):
+            date = pd.to_datetime(date).date()
+        elif hasattr(date, 'date'):
+            date = date.date()
+            
+        # Find matching row
+        matching_rows = df[df['Date'].dt.date == date]
+        if len(matching_rows) == 0:
+            st.error(f"No data found for date: {date}")
+            return None
+            
+        row = matching_rows.iloc[0]
         return {
+            'Date': row['Date'],
             'Day Pillar': row['Day Pillar'],
             'Day Pillar English': row['Day Pillar English'],
             'Month Pillar': row['Month Pillar'],
@@ -96,8 +131,61 @@ def get_bazi_for_date(date, df):
             'Year Pillar English': row['Year Pillar English'],
             'Day Officer': row['Day Officer']
         }
-    except:
+    except Exception as e:
+        st.error(f"Error finding Bazi for date: {str(e)}")
         return None
+
+def display_bazi_element(chinese, english, element_type):
+    """Display a Bazi element with styling."""
+    st.markdown(f"""
+        <div style="
+            background-color: #1E1E1E;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 0.5rem 0;
+            border: 1px solid #333;
+        ">
+            <h4 style="color: #4CAF50; margin: 0;">{element_type}</h4>
+            <div style="font-size: 1.2rem; margin: 0.5rem 0;">
+                <span style="color: #FFD700;">{chinese}</span>
+                <span style="color: #B3B3B3; margin-left: 1rem;">({english})</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+def get_element_relationship(element1, element2):
+    """Analyze the relationship between two elements."""
+    # Define the five elements cycle
+    productive_cycle = {
+        'Wood': 'Fire',
+        'Fire': 'Earth',
+        'Earth': 'Metal',
+        'Metal': 'Water',
+        'Water': 'Wood'
+    }
+    
+    controlling_cycle = {
+        'Wood': 'Earth',
+        'Earth': 'Water',
+        'Water': 'Fire',
+        'Fire': 'Metal',
+        'Metal': 'Wood'
+    }
+    
+    # Clean up element names
+    element1 = element1.split()[-1]  # Get last word (e.g., "Yang Wood" -> "Wood")
+    element2 = element2.split()[-1]
+    
+    if element2 == productive_cycle.get(element1):
+        return f"{element1} produces {element2} - This is a productive and favorable relationship"
+    elif element1 == productive_cycle.get(element2):
+        return f"{element2} is produced by {element1} - This indicates support and nurturing"
+    elif element2 == controlling_cycle.get(element1):
+        return f"{element1} controls {element2} - This suggests influence and regulation"
+    elif element1 == controlling_cycle.get(element2):
+        return f"{element2} controls {element1} - This may indicate some challenges"
+    else:
+        return f"{element1} and {element2} have an indirect relationship"
 
 def main():
     st.set_page_config(
@@ -167,201 +255,258 @@ def main():
     # Load daily Bazi data
     daily_bazi_df = load_daily_bazi()
 
-    # Add session state for storing the current profile
+    # Add session state for storing the current profile and view
     if 'current_profile' not in st.session_state:
         st.session_state.current_profile = None
+    if 'current_view' not in st.session_state:
+        st.session_state.current_view = "profile_analysis"
 
-    # Sidebar for loading existing profiles and daily Bazi
+    # Sidebar for profile selection
     with st.sidebar:
-        st.title("Navigation")
-        page = st.radio("Choose Page", ["Profile Analysis", "Daily Bazi"])
+        st.title("Profile Selection")
+        profiles = load_user_profiles()
         
-        if page == "Profile Analysis":
-            st.title("Saved Profiles")
-            profiles = load_user_profiles()
-            
-            if profiles:
-                profile_names = ["Select a profile..."] + [p["name"] for p in profiles]
-                selected_profile = st.selectbox("Load existing profile:", profile_names)
-                
-                if selected_profile != "Select a profile...":
-                    profile = next((p for p in profiles if p["name"] == selected_profile), None)
-                    if profile:
+        # New Profile Button
+        if st.button("➕ Create New Profile", use_container_width=True):
+            st.session_state.current_profile = None
+            st.session_state.current_view = "profile_analysis"
+        
+        st.markdown("---")
+        
+        if profiles:
+            st.subheader("Saved Profiles")
+            for profile in profiles:
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    if st.button(f"👤 {profile['name']}", key=f"profile_{profile['name']}", use_container_width=True):
                         st.session_state.current_profile = profile
-                        st.success(f"Loaded profile for {profile['name']}")
-            else:
-                st.info("No saved profiles found")
+                with col2:
+                    if st.button("🗑️", key=f"delete_{profile['name']}", help="Delete profile"):
+                        # Add delete functionality here
+                        pass
+        else:
+            st.info("No saved profiles found")
 
-    if page == "Profile Analysis":
-        st.title("BAZI Profile System")
-        st.markdown("<p style='font-size: 1.2rem; color: #B3B3B3;'>Enter your details below to receive your BAZI analysis</p>", unsafe_allow_html=True)
+    # Main content area
+    st.title("BAZI Profile System")
 
-        # Create a card-like container for the form
-        st.markdown("""
+    if st.session_state.current_profile is None:
+        # Show new profile form
+        st.markdown("<p style='font-size: 1.2rem; color: #B3B3B3;'>Enter your details below to create a new profile</p>", unsafe_allow_html=True)
+        
+        with st.container():
+            st.markdown("""<div class="details-card">""", unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("Your Name", key="name")
+                birth_date = st.date_input(
+                    "Birth Date",
+                    min_value=datetime(1900, 1, 1),
+                    max_value=datetime.now(),
+                    key="birth_date"
+                )
+                birth_time = st.time_input("Birth Time", key="birth_time")
+
+            with col2:
+                timezone_options = [
+                    "UTC-12:00", "UTC-11:00", "UTC-10:00", "UTC-09:00", "UTC-08:00",
+                    "UTC-07:00", "UTC-06:00", "UTC-05:00", "UTC-04:00", "UTC-03:00",
+                    "UTC-02:00", "UTC-01:00", "UTC+00:00", "UTC+01:00", "UTC+02:00",
+                    "UTC+03:00", "UTC+04:00", "UTC+05:00", "UTC+05:30", "UTC+06:00",
+                    "UTC+07:00", "UTC+08:00", "UTC+09:00", "UTC+10:00", "UTC+11:00",
+                    "UTC+12:00"
+                ]
+                timezone = st.selectbox("Timezone", timezone_options, key="timezone")
+                location = st.text_input("Birth Location (City, Country)", key="location")
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("Create Profile", use_container_width=True):
+                    if not name or not location:
+                        st.error("Please fill in all fields")
+                    else:
+                        try:
+                            formatted_date = birth_date.strftime("%b %d, %Y")
+                            formatted_time = birth_time.strftime("%I:%M %p")
+                            
+                            user_data = {
+                                "name": name,
+                                "birth_date": formatted_date,
+                                "birth_time": formatted_time,
+                                "timezone": timezone,
+                                "location": location
+                            }
+                            
+                            # Get and generate initial BAZI analysis
+                            profile_path = get_random_profile()
+                            with open(profile_path, 'r', encoding='utf-8') as f:
+                                profile_content = f.read()
+                            user_data["bazi_analysis"] = profile_content
+                            
+                            save_user_profile(user_data)
+                            st.session_state.current_profile = user_data
+                            st.experimental_rerun()
+                            
+                        except Exception as e:
+                            st.error(f"An error occurred: {str(e)}")
+
+    else:
+        # Show profile view with tabs for analysis and daily bazi
+        profile = st.session_state.current_profile
+        
+        # Profile header
+        st.markdown(f"""
             <div class="details-card">
+                <h3>Profile: {profile['name']}</h3>
+                <p><strong>Birth Date:</strong> {profile['birth_date']}</p>
+                <p><strong>Birth Time:</strong> {profile['birth_time']}</p>
+                <p><strong>Location:</strong> {profile['location']}</p>
+                <p><strong>Timezone:</strong> {profile['timezone']}</p>
+            </div>
         """, unsafe_allow_html=True)
         
-        # Create two columns for input fields
-        col1, col2 = st.columns(2)
-
-        # Pre-fill form if profile is loaded
-        profile = st.session_state.current_profile
-
-        with col1:
-            name = st.text_input("Your Name", key="name", value=profile["name"] if profile else "")
-            birth_date = st.date_input(
-                "Birth Date",
-                value=datetime.strptime(profile["birth_date"], "%b %d, %Y") if profile else None,
-                min_value=datetime(1900, 1, 1),
-                max_value=datetime.now(),
-                key="birth_date"
-            )
-            birth_time = st.time_input(
-                "Birth Time",
-                value=datetime.strptime(profile["birth_time"], "%I:%M %p").time() if profile else None,
-                key="birth_time"
-            )
-
-        with col2:
-            timezone_options = [
-                "UTC-12:00", "UTC-11:00", "UTC-10:00", "UTC-09:00", "UTC-08:00",
-                "UTC-07:00", "UTC-06:00", "UTC-05:00", "UTC-04:00", "UTC-03:00",
-                "UTC-02:00", "UTC-01:00", "UTC+00:00", "UTC+01:00", "UTC+02:00",
-                "UTC+03:00", "UTC+04:00", "UTC+05:00", "UTC+05:30", "UTC+06:00",
-                "UTC+07:00", "UTC+08:00", "UTC+09:00", "UTC+10:00", "UTC+11:00",
-                "UTC+12:00"
-            ]
-            timezone = st.selectbox(
-                "Timezone",
-                timezone_options,
-                index=timezone_options.index(profile["timezone"]) if profile and profile["timezone"] in timezone_options else 0,
-                key="timezone"
-            )
-            location = st.text_input(
-                "Birth Location (City, Country)",
-                value=profile["location"] if profile else "",
-                key="location"
-            )
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # Center the submit button
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            submit_button = st.button("Generate BAZI Analysis", use_container_width=True)
-
-        if submit_button:
-            if not name or not location:
-                st.error("Please fill in all fields")
+        # View selection tabs
+        tab1, tab2 = st.tabs(["🔮 BAZI Analysis", "📅 Daily BAZI"])
+        
+        with tab1:
+            if 'bazi_analysis' in profile:
+                st.markdown("""<div class="bazi-analysis">""", unsafe_allow_html=True)
+                st.markdown(profile['bazi_analysis'])
+                st.markdown("</div>", unsafe_allow_html=True)
             else:
-                try:
-                    # Format the date and time
-                    formatted_date = birth_date.strftime("%b %d, %Y")
-                    formatted_time = birth_time.strftime("%I:%M %p")
-                    
-                    # Create user data dictionary
-                    user_data = {
-                        "name": name,
-                        "birth_date": formatted_date,
-                        "birth_time": formatted_time,
-                        "timezone": timezone,
-                        "location": location
-                    }
-                    
-                    # Save the profile
-                    save_user_profile(user_data)
-                    
-                    # Show confirmation with custom styling
-                    st.markdown("""
-                        <div class="success-message">
-                            Information received and saved successfully!
+                st.warning("No BAZI analysis available for this profile")
+                
+        with tab2:
+            if daily_bazi_df is not None:
+                st.markdown("<div class='details-card'>", unsafe_allow_html=True)
+                
+                # Date selection with prev/next buttons
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col1:
+                    if st.button("◀️ Previous Day"):
+                        if 'selected_date' in st.session_state:
+                            st.session_state.selected_date = st.session_state.selected_date - pd.Timedelta(days=1)
+                        else:
+                            st.session_state.selected_date = pd.Timestamp.now() - pd.Timedelta(days=1)
+                
+                with col2:
+                    if 'selected_date' not in st.session_state:
+                        st.session_state.selected_date = pd.Timestamp.now()
+                    selected_date = st.date_input("Select Date", st.session_state.selected_date)
+                    st.session_state.selected_date = selected_date
+                
+                with col3:
+                    if st.button("Next Day ▶️"):
+                        if 'selected_date' in st.session_state:
+                            st.session_state.selected_date = st.session_state.selected_date + pd.Timedelta(days=1)
+                        else:
+                            st.session_state.selected_date = pd.Timestamp.now() + pd.Timedelta(days=1)
+                
+                daily_bazi = get_bazi_for_date(st.session_state.selected_date, daily_bazi_df)
+                
+                if daily_bazi:
+                    # Display Day Officer prominently
+                    st.markdown(f"""
+                        <div style="
+                            background-color: #2E3B2F;
+                            padding: 1rem;
+                            border-radius: 8px;
+                            margin: 1rem 0;
+                            text-align: center;
+                        ">
+                            <h3 style="color: #4CAF50; margin: 0;">Day Officer: {daily_bazi['Day Officer']}</h3>
                         </div>
                     """, unsafe_allow_html=True)
                     
-                    # Display user details in a card
-                    st.markdown("""
-                        <div class="details-card">
-                            <h3>Your Details</h3>
-                    """, unsafe_allow_html=True)
+                    # Display Pillars
+                    col1, col2, col3 = st.columns(3)
                     
-                    st.write(f"**Name:** {name}")
-                    st.write(f"**Birth Date:** {formatted_date}")
-                    st.write(f"**Birth Time:** {formatted_time}")
-                    st.write(f"**Timezone:** {timezone}")
-                    st.write(f"**Location:** {location}")
+                    with col1:
+                        display_bazi_element(
+                            daily_bazi['Day Pillar'],
+                            daily_bazi['Day Pillar English'],
+                            "Day Pillar"
+                        )
+                    
+                    with col2:
+                        display_bazi_element(
+                            daily_bazi['Month Pillar'],
+                            daily_bazi['Month Pillar English'],
+                            "Month Pillar"
+                        )
+                    
+                    with col3:
+                        display_bazi_element(
+                            daily_bazi['Year Pillar'],
+                            daily_bazi['Year Pillar English'],
+                            "Year Pillar"
+                        )
                     
                     st.markdown("</div>", unsafe_allow_html=True)
                     
-                    # Get and display random profile for analysis
-                    profile_path = get_random_profile()
+                    # Add personalized analysis section
+                    st.markdown("<div class='bazi-analysis'>", unsafe_allow_html=True)
+                    st.subheader(f"Daily BAZI Analysis for {profile['name']}")
                     
-                    with st.spinner("Analyzing your BAZI chart..."):
-                        # Add a small delay to show the spinner
-                        import time
-                        time.sleep(2)
-                        
-                        with open(profile_path, 'r', encoding='utf-8') as f:
-                            profile_content = f.read()
-                        
-                        # Save the BAZI analysis with the user profile
-                        user_data["bazi_analysis"] = profile_content
-                        save_user_profile(user_data)
-                        
-                        st.markdown("""
-                            <div class='bazi-analysis'>
-                                <h3>Your BAZI Analysis</h3>
-                        """, unsafe_allow_html=True)
-                        st.markdown(profile_content)
-                        st.markdown("</div>", unsafe_allow_html=True)
+                    # Display the five elements analysis
+                    st.markdown("""
+                        <h4 style="color: #4CAF50;">Five Elements Analysis</h4>
+                    """, unsafe_allow_html=True)
                     
-                except Exception as e:
-                    st.error(f"An error occurred: {str(e)}")
+                    # Extract elements from the pillars
+                    day_element = daily_bazi['Day Pillar English'].split()[0]
+                    month_element = daily_bazi['Month Pillar English'].split()[0]
+                    year_element = daily_bazi['Year Pillar English'].split()[0]
+                    
+                    # Display element relationships
+                    day_relationship_month = get_element_relationship(day_element, month_element)
+                    day_relationship_year = get_element_relationship(day_element, year_element)
+                    
+                    st.write(f"""
+                        **Day Element:** {day_element}
+                        - Relationship with Month Element ({month_element}): {day_relationship_month}
+                        - Relationship with Year Element ({year_element}): {day_relationship_year}
+                    """)
+                    
+                    st.markdown("""
+                        <h4 style="color: #4CAF50;">Personal Day Influence</h4>
+                    """, unsafe_allow_html=True)
+                    
+                    # Add personalized analysis based on the Day Officer
+                    day_officer_meanings = {
+                        'Open': 'A day for new beginnings and starting projects. Good for initiating actions.',
+                        'Close': 'A day for completing tasks and closing deals. Focus on finishing things.',
+                        'Balance': 'A day for finding harmony and making balanced decisions.',
+                        'Stable': 'A day for maintaining stability and routine tasks.',
+                        'Remove': 'A day for clearing obstacles and removing negativity.',
+                        'Full': 'A day of abundance and completion. Good for harvesting results.',
+                        'Danger': 'A day to be cautious and avoid risky ventures.',
+                        'Success': 'A day favorable for achieving goals and recognition.',
+                        'Receive': 'A day for accepting and receiving benefits.',
+                        'Establish': 'A day for establishing foundations and long-term plans.',
+                        'Destruction': 'A day for breaking down old patterns, avoid major decisions.',
+                        'Initiate': 'A day for taking initiative and leadership.'
+                    }
+                    
+                    day_officer = daily_bazi['Day Officer']
+                    day_meaning = day_officer_meanings.get(day_officer, 'A day to observe and act according to circumstances.')
+                    
+                    st.write(f"""
+                        The Day Officer of "{day_officer}" suggests:
+                        - {day_meaning}
+                        - This combines with your {day_element} day element to influence your activities
+                        - Consider the relationship between your day element and the current month's {month_element} energy
+                    """)
 
-        # Display BAZI Analysis
-        if st.session_state.current_profile and 'bazi_analysis' in st.session_state.current_profile:
-            st.markdown("### Your BAZI Analysis")
-            with st.container():
-                st.markdown("""<div class="bazi-analysis">""", unsafe_allow_html=True)
-                st.markdown(st.session_state.current_profile["bazi_analysis"])
-                st.markdown("</div>", unsafe_allow_html=True)
-
-    else:  # Daily Bazi page
-        st.title("Daily Bazi")
-        st.markdown("<div class='details-card'>", unsafe_allow_html=True)
-        
-        if daily_bazi_df is not None:
-            selected_date = st.date_input("Select Date", datetime.now())
-            daily_bazi = get_bazi_for_date(selected_date, daily_bazi_df)
-            
-            if daily_bazi:
-                st.subheader("Daily Bazi Information")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("**Day Pillar:**", daily_bazi['Day Pillar'])
-                    st.write("**Month Pillar:**", daily_bazi['Month Pillar'])
-                    st.write("**Year Pillar:**", daily_bazi['Year Pillar'])
-                    st.write("**Day Officer:**", daily_bazi['Day Officer'])
-                
-                with col2:
-                    st.write("**Day Pillar (English):**", daily_bazi['Day Pillar English'])
-                    st.write("**Month Pillar (English):**", daily_bazi['Month Pillar English'])
-                    st.write("**Year Pillar (English):**", daily_bazi['Year Pillar English'])
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-                
-                # Add analysis section in a new card
-                st.markdown("<div class='bazi-analysis'>", unsafe_allow_html=True)
-                st.subheader("Daily Bazi Analysis")
-                st.write("Analysis based on today's Bazi...")
-                # Add your daily Bazi analysis logic here
-                st.markdown("</div>", unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.warning("No BAZI information available for the selected date")
+                    st.markdown("</div>", unsafe_allow_html=True)
             else:
-                st.warning("No Bazi information available for the selected date")
-                st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.error("Could not load daily Bazi data")
-            st.markdown("</div>", unsafe_allow_html=True)
+                st.error("Could not load daily BAZI data")
 
 if __name__ == "__main__":
     main()
