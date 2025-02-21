@@ -4,78 +4,106 @@
 
 ```mermaid
 graph TD
+    %% Client Layer
     subgraph "Client Layer"
-        WA[Web App]
-        MA[Mobile App]
-        API[API Clients]
+        WA[Web App];
+        MA[Mobile App];
+        API[API Clients];
     end
 
+    %% Load Balancer Layer
     subgraph "Load Balancer Layer"
-        NLB[Network Load Balancer]
-        CDN[Content Delivery Network]
+        NLB[Network Load Balancer];
+        CDN[Content Delivery Network];
     end
 
+    %% Application Layer
     subgraph "Application Layer"
-        API_G[API Gateway]
+        API_G[API Gateway];
         
         subgraph "Service Mesh"
-            WS[Web Service]
-            CS[Chat Service]
-            PS[Profile Service]
-            AS[Analytics Service]
-            SS[Search Service]
+            WS[Web Service];
+            CS[Chat Service];
+            PS[Profile Service];
+            AS[Analytics Service];
+            SS[Search Service];
         end
         
         subgraph "Background Workers"
-            CW[Chat Workers]
-            AW[Analytics Workers]
-            NW[Notification Workers]
+            CW[Chat Workers];
+            AW[Analytics Workers];
+            NW[Notification Workers];
         end
     end
 
+    %% AI Layer
     subgraph "AI Layer"
-        LLM[LLM Service]
-        PM[Prompt Management]
-        CV[Context Vectorization]
+        LLM[LLM Service];
+        PM[Prompt Management];
+        CV[Context Vectorization];
         subgraph "Model Registry"
-            MT[Model Training]
-            MM[Model Monitoring]
-            MV[Model Versioning]
+            MT[Model Training];
+            MM[Model Monitoring];
+            MV[Model Versioning];
         end
     end
 
+    %% Data Layer
     subgraph "Data Layer"
         subgraph "Primary Storage"
-            RDS[(Main Database)]
-            CACHE[(Redis Cache)]
+            RDS[(Main Database)];
+            CACHE[(Redis Cache)];
         end
         
         subgraph "Analytics Storage"
-            TS[(Time Series DB)]
-            DW[(Data Warehouse)]
+            TS[(Time Series DB)];
+            DW[(Data Warehouse)];
         end
         
         subgraph "Search Storage"
-            ES[(Elasticsearch)]
-            VS[(Vector Store)]
+            ES[(Elasticsearch)];
+            VS[(Vector Store)];
         end
     end
 
+    %% DevOps Layer
     subgraph "DevOps Layer"
-        MON[Monitoring]
-        LOG[Logging]
-        TRACE[Tracing]
-        ALERT[Alerting]
+        MON[Monitoring];
+        LOG[Logging];
+        TRACE[Tracing];
+        ALERT[Alerting];
     end
 
-    Client Layer --> NLB
-    NLB --> API_G
-    API_G --> Service Mesh
-    Service Mesh --> Background Workers
-    Service Mesh --> AI Layer
-    Service Mesh --> Data Layer
-    Background Workers --> Data Layer
-    DevOps Layer -.-> Service Mesh
+    %% Connections
+    WA --> NLB;
+    MA --> NLB;
+    API --> NLB;
+    NLB --> API_G;
+    API_G --> WS;
+    API_G --> CS;
+    API_G --> PS;
+    API_G --> AS;
+    API_G --> SS;
+    
+    WS --> LLM;
+    CS --> LLM;
+    PS --> LLM;
+    
+    WS --> RDS;
+    CS --> RDS;
+    PS --> RDS;
+    AS --> DW;
+    SS --> ES;
+    
+    CW --> RDS;
+    AW --> TS;
+    NW --> CACHE;
+    
+    MON -.-> WS;
+    MON -.-> CS;
+    MON -.-> PS;
+    LOG -.-> Service Mesh;
+    TRACE -.-> Service Mesh;
 ```
 
 ## Component Details
@@ -218,35 +246,38 @@ graph TD
 
 ```mermaid
 graph TD
+    %% Environments
     subgraph "Production Environment"
-        PROD_K8S[Kubernetes Cluster]
-        PROD_DB[(Production DB)]
-        PROD_CACHE[(Production Cache)]
+        PROD_K8S[Kubernetes Cluster];
+        PROD_DB[(Production DB)];
+        PROD_CACHE[(Production Cache)];
     end
 
     subgraph "Staging Environment"
-        STAGE_K8S[Kubernetes Cluster]
-        STAGE_DB[(Staging DB)]
-        STAGE_CACHE[(Staging Cache)]
+        STAGE_K8S[Kubernetes Cluster];
+        STAGE_DB[(Staging DB)];
+        STAGE_CACHE[(Staging Cache)];
     end
 
     subgraph "Development Environment"
-        DEV_K8S[Kubernetes Cluster]
-        DEV_DB[(Development DB)]
-        DEV_CACHE[(Development Cache)]
+        DEV_K8S[Kubernetes Cluster];
+        DEV_DB[(Development DB)];
+        DEV_CACHE[(Development Cache)];
     end
 
+    %% CI/CD Pipeline
     subgraph "CI/CD Pipeline"
-        GIT[GitHub]
-        JENKINS[Jenkins]
-        ARGOCD[ArgoCD]
+        GIT[GitHub];
+        JENKINS[Jenkins];
+        ARGOCD[ArgoCD];
     end
 
-    GIT --> JENKINS
-    JENKINS --> ARGOCD
-    ARGOCD --> DEV_K8S
-    ARGOCD --> STAGE_K8S
-    ARGOCD --> PROD_K8S
+    %% Connections
+    GIT --> JENKINS;
+    JENKINS --> ARGOCD;
+    ARGOCD --> DEV_K8S;
+    ARGOCD --> STAGE_K8S;
+    ARGOCD --> PROD_K8S;
 ```
 
 ## Scaling Strategy
