@@ -3,8 +3,10 @@ from datetime import datetime
 import random
 from pathlib import Path
 import json
-import os
 import pandas as pd
+from bazi_chat import BaziChatbot
+import pytz
+from typing import Dict, Any
 
 def parse_date(date_str):
     """Try to parse date string in multiple formats."""
@@ -186,6 +188,50 @@ def get_element_relationship(element1, element2):
         return f"{element2} controls {element1} - This may indicate some challenges"
     else:
         return f"{element1} and {element2} have an indirect relationship"
+
+def validate_birth_datetime(date_str: str, time_str: str, timezone_str: str) -> bool:
+    """Validate birth date, time and timezone input."""
+    try:
+        # Validate date format
+        datetime.strptime(date_str, "%Y-%m-%d")
+        
+        # Validate time format
+        datetime.strptime(time_str, "%H:%M")
+        
+        # Validate timezone format (simple UTC offset validation)
+        if not (timezone_str.startswith("UTC+") or timezone_str.startswith("UTC-")):
+            return False
+        int(timezone_str[4:])  # Should be a number after UTC+/-
+        
+        return True
+    except ValueError:
+        return False
+
+def format_bazi_data(bazi_data: Dict[str, Any]) -> str:
+    """Format Bazi data into a readable string."""
+    return f"""
+Year Pillar: {bazi_data['year_pillar']}
+Month Pillar: {bazi_data['month_pillar']}
+Day Pillar: {bazi_data['day_pillar']}
+Hour Pillar: {bazi_data['hour_pillar']}
+Day Officer: {bazi_data['day_officer']}
+"""
+
+def get_daily_bazi(date: str, daily_bazi_df: pd.DataFrame) -> Dict[str, Any]:
+    """Get Bazi data for a specific date from CSV."""
+    try:
+        daily = daily_bazi_df[daily_bazi_df['date'] == date].iloc[0]
+        return {
+            "day_officer": daily["day_officer"],
+            "favorable_elements": daily["favorable_elements"].split("-"),
+            "unfavorable_elements": daily["unfavorable_elements"].split("-")
+        }
+    except (IndexError, KeyError):
+        return {
+            "day_officer": "Unknown",
+            "favorable_elements": [],
+            "unfavorable_elements": []
+        }
 
 def main():
     st.set_page_config(
@@ -369,7 +415,7 @@ def main():
         """, unsafe_allow_html=True)
         
         # View selection tabs
-        tab1, tab2 = st.tabs(["🔮 BAZI Analysis", "📅 Daily BAZI"])
+        tab1, tab2, tab3 = st.tabs(["🔮 BAZI Analysis", "📅 Daily BAZI", "💬 BAZI Chat"])
         
         with tab1:
             if 'bazi_analysis' in profile:
@@ -507,6 +553,54 @@ def main():
                     st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.error("Could not load daily BAZI data")
+
+        with tab3:
+            st.markdown("<div class='bazi-analysis'>", unsafe_allow_html=True)
+            st.subheader("Chat with Your BAZI Advisor")
+            
+            # Initialize chatbot if not exists
+            if 'chatbot' not in st.session_state:
+                st.session_state.chatbot = BaziChatbot(
+                    profile_data=profile,
+                    daily_bazi=daily_bazi if daily_bazi_df is not None else None
+                )
+            
+            # Update daily bazi in chatbot
+            if daily_bazi_df is not None and daily_bazi:
+                st.session_state.chatbot.update_daily_bazi(daily_bazi)
+            
+            # Initialize message history if not exists
+            if 'messages' not in st.session_state:
+                st.session_state.messages = []
+            
+            # Display chat history
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+            
+            # Chat input
+            if prompt := st.chat_input("Ask about your BAZI reading..."):
+                # Add user message to chat history
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # Get chatbot response
+                with st.chat_message("assistant"):
+                    with st.spinner("Analyzing your BAZI..."):
+                        try:
+                            response = st.session_state.chatbot.get_response(prompt)
+                            st.markdown(response)
+                            # Add assistant response to chat history
+                            st.session_state.messages.append({"role": "assistant", "content": response})
+                        except Exception as e:
+                            error_message = f"I apologize, but I encountered an error: {str(e)}"
+                            st.error(error_message)
+                            st.session_state.messages.append({"role": "assistant", "content": error_message})
+            
+            st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
