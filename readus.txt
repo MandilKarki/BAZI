@@ -1,0 +1,963 @@
+Compliance & regulatory checkboxes  
+
+These are the “must-have” controls that keep it simple and defensible: 
+
+Data minimization: don’t store raw payloads by default 
+
+PII-safe logging: redact in logs; log only metadata + hashes 
+
+Encryption in transit (TLS) + mTLS internally if required 
+
+Encryption at rest for DB + backups (and separate keys) 
+
+RBAC (admin vs policy author vs viewer) 
+
+Tenant isolation (policy namespaces, separate keys, separate quotas) 
+
+Retention policies for findings and audit logs 
+
+Break-glass + approvals for policy changes 
+
+Versioned policies (every decision ties to policy version) 
+
+Phase 1 (4–6 components) 
+
+Gateway + PingFed auth 
+
+PII Guard service (regex + validators + context keywords) 
+
+Postgres (tenants/policies) 
+
+Vault (secrets) 
+
+Dynatrace 
+
+Deploy on OCP 
+
+Phase 2 (enterprise hardening) 
+
+Add CADP/tokenization (if needed) 
+
+Add Redis cache 
+
+Add DR + multi-region + blue/green deployments 
+
+Phase 3 (async + discovery) 
+
+Add Kafka + worker fleet for data-at-rest scanning, workflow automation 
+
+1) Detect / Classify (non-ML) 
+
+Regex + deterministic validators + context keywords + field-name hints 
+
+Outputs: findings, confidence, entity types, locations, decision 
+
+2) Transform (de-identify) 
+
+Provide a small, opinionated set of transformations: 
+
+Redact (remove completely) 
+
+Mask (partial reveal, e.g., last4) 
+
+Hash (HMAC/hashed w/ rotation support) 
+
+Replace (static placeholder or type placeholder like <EMAIL>) 
+
+Pseudonymize (consistent replacement per tenant/policy without storing raw data) 
+
+3) Decide (policy decisioning) 
+
+Return a deterministic decision: 
+
+ALLOW | WARN | BLOCK 
+
+Reason codes + policy version + minimal metadata for audit 
+
+4) Batch sanitization (prod → QA/dev) 
+
+A “dataset sanitizer” service that: 
+
+Takes structured data exports (CSV/JSON/Parquet) or file blobs 
+
+Applies the same policy transforms 
+
+Produces masked datasets for lower envs 
+
+Optionally produces a mapping artifact (highly restricted access) only if the business truly needs reversibility 
+
+5) Workflow / Case management integration 
+
+Create / update ServiceNow incidents/tasks/requests automatically: 
+
+“Blocked outbound due to PAN” 
+
+“Dev dataset request: sanitize export X” 
+
+“Policy exception request” 
+
+“False positive tuning request” 
+
+ 
+
+Architecture overview (simple + comprehensive) 
+
+Data plane (fast path: every request) 
+
+Client app / pipeline / LLM gateway 
+→ API Gateway / Ingress (rate limits, request size limits, auth) 
+→ DSaaS Runtime Service (inspect/transform/decide) 
+→ returns sanitized payload + decision 
+
+Control plane (slow path: onboarding/policies) 
+
+Admin UI / CLI / CI pipeline 
+→ Policy Service (create/version/test/publish policies) 
+→ Config Store (Postgres) 
+→ Audit Log Store (metadata only) 
+
+Workflow plane (ServiceNow) 
+
+DSaaS → ServiceNow Integration Service 
+
+incident/task creation, updates, assignment routing 
+
+request catalog for onboarding and dataset sanitization jobs 
+
+Batch plane (prod→QA/dev) 
+
+Export job → Batch Sanitizer Workers → Sanitized storage target 
+
+optionally evented via a queue if you need scale later (not required day 1) 
+
+1) API gateway / ingress (required) 
+
+OpenShift Route/Ingress + gateway (Apigee or Kong/NGINX/Envoy) 
+
+Must-have controls: 
+
+TLS, mTLS if required internally 
+
+rate limiting/quotas 
+
+max payload size (critical for LLM payloads) 
+
+correlation IDs 
+
+2) AuthN/AuthZ (required) 
+
+PingFederate (OIDC/OAuth2) or your org’s standard 
+
+JWT validation at gateway/service 
+
+RBAC for admin endpoints 
+
+3) DSaaS Runtime Service (required) 
+
+Stateless service that implements: 
+
+detectors + validators + context scoring 
+
+transformations 
+
+decisioning 
+
+structured & unstructured payload support 
+
+4) Postgres (required) 
+
+Store: 
+
+tenants/apps 
+
+policy definitions + versions 
+
+allowlists/exceptions 
+
+audit metadata (no raw payloads) 
+
+onboarding state 
+
+5) Secrets manager (required) 
+
+HashiCorp Vault for secrets, rotation, and (optionally) crypto operations 
+
+6) Observability (required) 
+
+Dynatrace (or equivalent) for metrics/logs/traces + SLO alerts 
+
+7) ServiceNow integration service (required per your requirement) 
+
+Keep this separate from runtime to avoid SN latency impacting request path. 
+
+8) OpenShift deployment (required) 
+
+Separate namespaces for runtime vs con 
+
+Prod → QA/Dev transmission design (the clean, compliant way) 
+
+The safe pattern 
+
+Prod export job (owned by data owner) 
+
+DSaaS Batch Sanitizer applies policy set: 
+
+remove direct identifiers (email, SIN, PAN) 
+
+pseudonymize join keys (customer_id) so QA data still joins 
+
+Output written to QA/dev storage (with labels + retention) 
+
+Job produces a report: 
+
+what entities were found 
+
+counts 
+
+transformations applied 
+
+policy version 
+
+ServiceNow ticket created automatically: 
+
+requester, dataset, policy, approver, evidence 
+
+Key controls 
+
+Separate “sanitized datasets” bucket/location 
+
+Short retention in lower envs 
+
+No raw prod data ever goes to QA/dev 
+
+Audit evidence is generated automatically (huge win) 
+
+Step 1 — Client calls DSaaS 
+
+Your app sends JSON/text/file snippet to: 
+
+/inspect (just tell me what’s sensitive) 
+
+/transform (sanitize it) 
+
+/preflight-llm (sanitize + enforce LLM policy) 
+
+Step 2 — Auth is validated 
+
+Gateway validates JWT token (fast) 
+
+DSaaS validates claims (tenant/app/policy entitlement) 
+
+Step 3 — Detection Engine runs (no ML) 
+
+Regex finds candidates (emails, PAN-like numbers, etc.) 
+
+Validators confirm (Luhn for PAN, MOD97 for IBAN, etc.) 
+
+Context keywords boost/downgrade confidence 
+
+Step 4 — Transformation Engine applies policy 
+
+Depending on policy: 
+
+PAN → mask last4 
+
+SIN/SSN → redact 
+
+Email → pseudonymize 
+
+free text → replace with <EMAIL> <ACCOUNT> etc. 
+
+Step 5 — Decision Engine returns ALLOW/WARN/BLOCK 
+
+ALLOW: sanitized payload comes back 
+
+WARN: sanitized payload + warning metadata 
+
+BLOCK: no payload returns (or returns heavily redacted), and we generate a workflow event 
+
+Step 6 — Audit events emitted (no raw payload) 
+
+DSaaS sends an event to Kafka: “policy X decided BLOCK because PAN” 
+
+Consumers write metadata to DB for reporting 
+
+ServiceNow can be triggered for blocking / violations 
+
+ 
+
+4) Why Kafka + Redis (and what they do) 
+
+Redis (speed + cost control) 
+
+cache the latest policy bundle by tenant/version 
+
+cache compiled regex patterns (fast matching) 
+
+idempotency keys (avoid repeated processing if the same request is retried) 
+
+Kafka (durable async backbone) 
+
+decouples “real-time request path” from slow tasks: 
+
+reporting writes 
+
+alerts 
+
+ServiceNow ticket creation 
+
+batch sanitization job dispatch 
+
+This is how you keep the sync API fast and stable. 
+
+ 
+
+5) Batch sanitization (Prod → QA/Dev) — what happens 
+
+This is for: “I need prod-like data in QA/dev, but safe.” 
+
+Step 1 — Team requests dataset sanitization 
+
+through DSaaS /batch/sanitize 
+
+(often triggered by pipeline or ServiceNow request) 
+
+Step 2 — Job event goes to Kafka 
+
+batch dispatcher picks it up 
+
+Step 3 — Workers sanitize files 
+
+read source export 
+
+detect + transform using the same policy as the sync path 
+
+write sanitized outputs to object storage (or approved target) 
+
+Step 4 — Compliance report generated 
+
+counts of entity types found 
+
+what transforms applied 
+
+policy version 
+
+job IDs and timestamps (audit evidence) 
+
+Step 5 — ServiceNow updated 
+
+ticket updated with job results and evidence link pointers 
+
+ 
+
+6) Where ServiceNow fits (without slowing your API) 
+
+ServiceNow is never on the hot path. 
+
+The DSaaS sync path publishes events. 
+
+A consumer or connector service handles ServiceNow: 
+
+create INC for BLOCK 
+
+create RITM for onboarding/batch requests 
+
+create tasks for tuning false positives 
+
+That keeps latency sane. 
+
+I’ll use the same architecture pieces you already have: Gateway/LB, Auth, PII Guard, Redis, Kafka, Postgres, Vault, Dynatrace, ServiceNow. 
+
+Scenario A — “Detection only” (/inspect) 
+
+Goal: return findings; no sanitization needed. 
+
+User uses an enterprise app (or pipeline). 
+
+The app gets a token from PingFederate (OAuth/OIDC). 
+
+App calls DSaaS: POST /inspect with payload. 
+
+Request hits OpenShift Route / LB, then API Gateway. 
+
+Gateway validates the token (JWT validation). 
+
+Gateway forwards request to PII Guard API (running as a container on OpenShift). 
+
+PII Guard loads the policy bundle: 
+
+checks Redis cache first (fast) 
+
+if not cached, reads from Postgres, then caches in Redis 
+
+PII Guard runs Detection Engine: 
+
+regex + validators + context keywords 
+
+PII Guard computes a decision (usually ALLOW/WARN for inspect-only) + findings. 
+
+PII Guard returns response to the app. 
+
+In parallel, PII Guard emits an audit/usage event to Kafka (no raw payload). 
+
+Audit consumer reads Kafka and writes metadata to Usage DB. 
+
+Dynatrace collects metrics/traces/logs for the request path. 
+
+That’s the full end-to-end “inspect” path. 
+
+ 
+
+Scenario B — “Transform / Preflight” (/transform or /preflight-llm) 
+
+Goal: return a sanitized payload (redact/mask/hash/replace/pseudonymize) + decision. 
+
+1–7) Same as Scenario A (token → gateway → PII Guard → policy from Redis/Postgres). 
+8) Detection Engine finds entities. 
+9) Transformation Engine applies policy: 
+
+redact PAN/SIN/SSN 
+
+mask last4 
+
+hash(HMAC) using key material managed via Vault (PII Guard retrieves key from Vault or uses a Vault-backed secret) 
+
+Decision Engine outputs ALLOW/WARN/BLOCK. 
+
+Response returns sanitized payload + findings + decision to the app. 
+
+App uses sanitized payload to call Azure OpenAI / Bedrock / vendor API safely. 
+
+Kafka events → consumers → Usage DB. 
+
+Dynatrace observes. 
+
+ 
+
+Scenario C — “BLOCK + ServiceNow ticket” 
+
+Goal: block outbound action and create an auditable case. 
+
+1–9) Same detection/transform path. 
+10) Decision Engine returns BLOCK. 
+11) PII Guard returns a blocked response to the app (with reason codes). 
+12) PII Guard emits a Kafka event: “BLOCK decision”. 
+13) Alerts consumer (or ServiceNow connector) reads event and calls ServiceNow: 
+
+creates INC/RITM/task with app name, policy version, entity types/counts, correlation id 
+
+Dynatrace traces both the API request and the ServiceNow connector activity. 
+
+Important design detail: ServiceNow calls should be async (via Kafka) so your API doesn’t slow down waiting for ServiceNow. 
+
+ 
+
+Scenario D — “Batch sanitization” (Prod → QA/Dev dataset) 
+
+Goal: sanitize large datasets and generate compliance report. 
+
+User/app submits: POST /batch/sanitize with dataset reference + policy id. 
+
+Request goes Route/LB → Gateway → Batch API (in OpenShift). 
+
+Batch API creates a job record (in Postgres or Usage DB) and emits a job event to Kafka. 
+
+Batch dispatcher consumer reads job event and assigns work (chunking strategy). 
+
+Sanitizer workers (containers) pick up work: 
+
+read input dataset (from where your bank stores it: file share, object store, DB export) 
+
+run Detection + Transform using same policy bundle (Redis/Postgres) 
+
+write sanitized outputs to Object Storage 
+
+Workers generate Compliance Report (counts, transforms, policy version) → Object Storage. 
+
+Workers emit job metrics/events → Kafka → Usage DB. 
+
+ServiceNow connector updates a ticket with completion + evidence links/pointers. 
+
+QA/Dev systems consume only the sanitized output. 
+
+ 
+
+Scenario E — “Policy change / publish” 
+
+Goal: roll out policy changes safely and consistently. 
+
+Admin uses Policy Service: create/update a policy version. 
+
+Policy Service writes policy version to Postgres. 
+
+Policy is “published” (becomes active). 
+
+PII Guard starts using new policy version: 
+
+either because it polls for latest version, or 
+
+because Policy Service emits a “policy updated” event → Redis cache invalidation 
+
+All decisions now include policy version for audit. 
+
+ 
+
+Scenario F — CI/CD + deploy (how new code reaches production) 
+
+This is the “how it gets built and hosted” story: 
+
+Developer pushes code to Git. 
+
+CI runs: tests + security checks. 
+
+CI builds a Docker image for each service (PII Guard, workers, consumers…). 
+
+Images are pushed to an internal registry. 
+
+CD deploys to OpenShift (dev → QA → prod): 
+
+OpenShift pulls the new images 
+
+replaces old running containers with new ones (rolling deploy) 
+
+The new pods start, pass health checks, and traffic switches over. 
+
+That’s the whole life cycle. 
+
+ 
+
+ 
+
+%%{init: { 
+
+  "theme": "base", 
+
+  "themeVariables": { 
+
+    "fontFamily": "Inter, Segoe UI, Arial", 
+
+    "lineColor": "#5B6B7A", 
+
+    "textColor": "#0F172A", 
+
+    "clusterBkg": "#F7FAFF", 
+
+    "clusterBorder": "#B6C6E3" 
+
+  } 
+
+}}%% 
+
+flowchart LR 
+
+ 
+
+%% ========================= 
+
+%% CLIENTS (who calls DSaaS) 
+
+%% ========================= 
+
+subgraph C["Clients / Callers"] 
+
+  direction TB 
+
+  U["Users (humans)"] 
+
+  APP["Enterprise Apps<br/>(Prod/Test)"] 
+
+  PIPE["Pipelines / ETL / Batch Jobs"] 
+
+  LLMGW["LLM Gateway / App Service<br/>(the thing that calls models)"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% EDGE & ACCESS 
+
+%% ========================= 
+
+subgraph E["Edge & Access Layer"] 
+
+  direction TB 
+
+  LB["Load Balancer / OpenShift Route<br/>TLS termination + routing"] 
+
+  GW["API Gateway / API Mgmt<br/>rate-limit • quotas • versioning • authn hooks"] 
+
+  AUTH["Auth Server (PingFederate)<br/>OAuth2/OIDC tokens"] 
+
+  LDAP[("LDAP / AD<br/>Groups + service accounts")] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% DSaaS DATA PLANE (SYNC) 
+
+%% ========================= 
+
+subgraph D["DSaaS Data Plane (Sync Path)"] 
+
+  direction TB 
+
+  PRE["PII Guard API<br/>/inspect • /transform • /preflight-llm"] 
+
+  DET["Detection Engine<br/>regex + context keywords + validators"] 
+
+  XFM["Transformation Engine<br/>redact • mask • hash(HMAC) • replace • pseudonymize"] 
+
+  DEC["Decision Engine<br/>ALLOW • WARN • BLOCK<br/>reason codes + policy version"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% ASYNC BACKBONE (KAFKA) 
+
+%% ========================= 
+
+subgraph K["Async Backbone (Kafka Queue)"] 
+
+  direction TB 
+
+  KAFKA[("Kafka Topics")] 
+
+  AUDC["Audit/Usage Consumer"] 
+
+  ALERTC["Limits/Alerts Consumer"] 
+
+  BATCHC["Batch Dispatcher Consumer"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% STORAGE + SECRETS + CACHE 
+
+%% ========================= 
+
+subgraph S["Storage, Secrets, Cache"] 
+
+  direction TB 
+
+  PG[("Postgres<br/>Tenants • Policies • Allowlists • Versions")] 
+
+  USG[("SQL Usage DB<br/>usage • cost • decisions (metadata)")] 
+
+  REDIS[("Redis<br/>policy cache • compiled regex cache • idempotency")] 
+
+  VAULT["HashiCorp Vault<br/>secrets • HMAC keys • rotations"] 
+
+  OBJ[("Object Storage<br/>sanitzed exports • reports")] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% CONTROL PLANE 
+
+%% ========================= 
+
+subgraph P["DSaaS Control Plane"] 
+
+  direction TB 
+
+  POL["Policy Service<br/>create • test • publish • rollback"] 
+
+  PORTAL["Developer Portal / Docs (optional)"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% WORKFLOW (ServiceNow) 
+
+%% ========================= 
+
+subgraph W["Workflow & Approvals"] 
+
+  direction TB 
+
+  SNX["ServiceNow Connector<br/>create/update tickets"] 
+
+  SN["ServiceNow<br/>INC / RITM / CHG / Tasks"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% OBSERVABILITY 
+
+%% ========================= 
+
+subgraph O["Observability"] 
+
+  direction TB 
+
+  DYN["Dynatrace / APM<br/>metrics • logs • traces • SLOs"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% DOWNSTREAM DESTINATIONS / MODEL PROVIDERS 
+
+%% ========================= 
+
+subgraph M["Downstream Destinations (Examples)"] 
+
+  direction TB 
+
+  AZ["Azure OpenAI (example)"] 
+
+  AWS["AWS Bedrock / SageMaker (example)"] 
+
+  EXT["Other External APIs / Vendors"] 
+
+  DEVQA["QA/Dev/Research systems<br/>(where sanitized data may go)"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% BATCH SANITIZATION (Prod -> QA/Dev) 
+
+%% ========================= 
+
+subgraph B["Batch Sanitization (Prod → QA/Dev)"] 
+
+  direction TB 
+
+  BAPI["Batch API<br/>/batch/sanitize • /jobs/{id}"] 
+
+  WORKERS["Sanitizer Workers<br/>CSV/JSON/Parquet/files"] 
+
+  REPORT["Compliance Report<br/>counts • transforms • policy version"] 
+
+end 
+
+ 
+
+%% ========================= 
+
+%% FLOWS (wiring) 
+
+%% ========================= 
+
+ 
+
+%% Client ingress 
+
+U --> APP 
+
+APP --> LB 
+
+LB --> GW 
+
+GW --> PRE 
+
+PIPE --> LB 
+
+LLMGW --> LB 
+
+ 
+
+%% Auth flow 
+
+APP -.->|"get token"| AUTH 
+
+AUTH --- LDAP 
+
+GW -.->|"validate JWT"| AUTH 
+
+PRE -.->|"validate claims (tenant/policy)"| AUTH 
+
+ 
+
+%% Core sync processing 
+
+PRE --> DET 
+
+DET --> XFM 
+
+XFM --> DEC 
+
+PRE <--> REDIS 
+
+PRE <--> VAULT 
+
+POL <--> PG 
+
+PRE --> PG 
+
+ 
+
+%% Decision outcomes 
+
+DEC -->|"allow/warn + sanitized payload"| APP 
+
+DEC -->|"block (reason codes)"| SNX 
+
+SNX --> SN 
+
+ 
+
+%% Events (async) 
+
+PRE -->|"audit/usage event"| KAFKA 
+
+DEC -->|"decision event"| KAFKA 
+
+KAFKA --> AUDC 
+
+AUDC --> USG 
+
+KAFKA --> ALERTC 
+
+ALERC --> SNX 
+
+ 
+
+%% Batch path 
+
+BAPI --> LB 
+
+LB --> GW 
+
+GW --> BAPI 
+
+BAPI -->|"publish job event"| KAFKA 
+
+KAFKA --> BATCHC 
+
+BATCHC --> WORKERS 
+
+WORKERS --> DET 
+
+WORKERS --> XFM 
+
+WORKERS --> OBJ 
+
+WORKERS --> REPORT 
+
+REPORT --> OBJ 
+
+REPORT --> SNX 
+
+SNX --> SN 
+
+OBJ --> DEVQA 
+
+ 
+
+%% Reporting / portal 
+
+USG --> PORTAL 
+
+PG --> PORTAL 
+
+ 
+
+%% Observability 
+
+GW --> DYN 
+
+PRE --> DYN 
+
+POL --> DYN 
+
+WORKERS --> DYN 
+
+SNX --> DYN 
+
+ 
+
+%% Downstream destinations (after sanitization) 
+
+APP -->|"sanitized prompt"| AZ 
+
+APP -->|"sanitized prompt"| AWS 
+
+APP -->|"sanitized payload"| EXT 
+
+ 
+
+%% ========================= 
+
+%% STYLES (soft blue + yellow + clean neutrals) 
+
+%% ========================= 
+
+classDef edge fill:#DCEBFF,stroke:#3B82F6,color:#0F172A,stroke-width:1px; 
+
+classDef core fill:#FFF3C4,stroke:#EAB308,color:#0F172A,stroke-width:1px; 
+
+classDef async fill:#FFE7D6,stroke:#F97316,color:#0F172A,stroke-width:1px; 
+
+classDef store fill:#EAF7EA,stroke:#22C55E,color:#0F172A,stroke-width:1px; 
+
+classDef workflow fill:#F2ECFF,stroke:#8B5CF6,color:#0F172A,stroke-width:1px; 
+
+classDef obs fill:#E6FAFF,stroke:#06B6D4,color:#0F172A,stroke-width:1px; 
+
+classDef dest fill:#F3F4F6,stroke:#64748B,color:#0F172A,stroke-width:1px; 
+
+ 
+
+class LB,GW,AUTH,LDAP edge; 
+
+class PRE,DET,XFM,DEC core; 
+
+class KAFKA,AUDC,ALERTC,BATCHC async; 
+
+class PG,USG,REDIS,VAULT,OBJ store; 
+
+class SNX,SN workflow; 
+
+class DYN obs; 
+
+class AZ,AWS,EXT,DEVQA dest; 
+
+ 
+
+style C fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style E fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style D fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style K fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style S fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style P fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style W fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style O fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style M fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+style B fill:#F7FAFF,stroke:#B6C6E3,stroke-width:1px 
+
+ 
